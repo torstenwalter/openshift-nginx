@@ -1,0 +1,156 @@
+apiVersion: v1
+kind: Template
+metadata:
+  name: generic-template
+  annotations:
+    description: "A generic template which creates a DeploymentConfig, Service and Route for a given docker image"
+    tags: "webserver"
+objects:
+- kind: ConfigMap
+  apiVersion: v1
+  metadata:
+    name: ${NAME}-nginx-config
+  data:
+    grafana-nginx.conf: |
+      server {
+        listen 8443 ssl;
+        ssl_certificate /etc/nginx/certs/tls.crt;
+        ssl_certificate_key /etc/nginx/certs/tls.key;
+        index index.html index.htm;
+
+        location / {
+         proxy_pass http://localhost:8080/;
+        }
+      }
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: ${NAME}
+    name: ${NAME}
+  spec:
+    replicas: 1
+    selector:
+      app: ${NAME}
+      deploymentconfig: ${NAME}
+    template:
+      metadata:
+        labels:
+          app: ${NAME}
+          deploymentconfig: ${NAME}
+      spec:
+        containers:
+        - image: ${DOCKER_IMAGE}
+          imagePullPolicy: Always
+          name: application
+          ports:
+          - containerPort: "${{CONTAINER_PORT}}"
+            protocol: TCP
+          terminationMessagePath: /dev/termination-log
+        - image: twalter/openshift-nginx:stable-alpine
+          imagePullPolicy: Always
+          name: nginx
+          ports:
+          - containerPort: 8443
+            protocol: TCP
+          volumeMounts:
+          - mountPath: /etc/nginx/conf.d/
+            name: nginx-config-volume
+          - mountPath: /etc/nginx/certs
+            name: nginx-cert-volume
+        initContainers:
+        - name: init-mydb
+          image: busybox
+          command: ['sh', '-c', 'until nslookup mydb; do echo waiting for mydb; sleep 2; done;']
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: ${NAME}-nginx-config
+          name: nginx-config-volume
+        - secret:
+            secretName: ${NAME}-cert
+          name: nginx-cert-volume
+    triggers: {}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: ${NAME}
+    name: ${NAME}
+    annotations:
+      service.alpha.openshift.io/serving-cert-secret-name: ${NAME}-cert
+  spec:
+    ports:
+    - port: 8443
+      protocol: TCP
+      targetPort: 8443
+      name: http
+    selector:
+      app: ${NAME}
+      deploymentconfig: ${NAME}
+- apiVersion: v1
+  kind: Route
+  metadata:
+    labels:
+      app: ${NAME}
+    name: ${NAME}
+  spec:
+    port:
+      targetPort: 8443
+    to:
+      kind: Service
+      name: ${NAME}
+    tls:
+      termination: reencrypt
+      insecureEdgeTerminationPolicy: Redirect
+      destinationCACertificate: |-
+        -----BEGIN CERTIFICATE-----
+        MIIC6jCCAdKgAwIBAgIBATANBgkqhkiG9w0BAQsFADAmMSQwIgYDVQQDDBtvcGVu
+        c2hpZnQtc2lnbmVyQDE1MDIyNzM5MjgwHhcNMTcwODA5MTAxODQ3WhcNMjIwODA4
+        MTAxODQ4WjAmMSQwIgYDVQQDDBtvcGVuc2hpZnQtc2lnbmVyQDE1MDIyNzM5Mjgw
+        ggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC9QFImdDEaXQB7WgXH6xP1
+        +K/FZVubvgoZq6ZTyxjTuBWq3YOrgP9msTO4PIwBzfWgHpfXj0O6OM8u9EDUhJn2
+        KhNFt/1AxikIsAkjundyp060rpDqJYmlrOGx4l8Z3CAnNLhlaVqNSETvo25taMXU
+        F/jqvOZy4w/TxufIeXyBKUQTmaRb4GdHkfoKJmzJgOGzIJY+nrRZ1K43bimoBsq2
+        nv0f021eRkJTnIIDfvHz4Ub2iVwgykTq/WcQ5jDWoN2cB14Eh7c2XuDKR576NM5H
+        9m4l6nVvUgsR98QvcsJvbSYe5Dqokmrpn1yO/d1OGvkIUdr7yKG5BH0Ami3y0A1B
+        AgMBAAGjIzAhMA4GA1UdDwEB/wQEAwICpDAPBgNVHRMBAf8EBTADAQH/MA0GCSqG
+        SIb3DQEBCwUAA4IBAQCsMjLC/LDXznCxdhRcHp0pKjV1PmyYPyR65yhLxkkJDH98
+        LFDFkme8PX775Lz1dg6x5hdsukvbv6w5ye0Q1MMp+K4pGo0Q6SZHS0q7yJwoU7Sj
+        rDPswWJtU4Qx/IXEeTx4DbGYnJLMEdLAf8wwCJmkjdREFLlvx6S1V5lubNYwGDuh
+        TjAdoEbiFbeI1p/BkQO8FMbwfCEiiU5XrhJo7Kb0mO55X5fJ9HXvjG9ti5fi6/p1
+        XVDcCxsJCG95cFeTOaU8X5lVYNpGL2Be4eiq8wxtor5SU6dIk2y82aapAhbqQGgI
+        BXITj675yR23zyFdZb/EN9W1ZLrrB0cjPZRvTY5G
+        -----END CERTIFICATE-----
+
+        -----BEGIN CERTIFICATE-----
+        MIIDCjCCAfKgAwIBAgIBATANBgkqhkiG9w0BAQsFADA2MTQwMgYDVQQDDCtvcGVu
+        c2hpZnQtc2VydmljZS1zZXJ2aW5nLXNpZ25lckAxNTAyMjczOTI4MB4XDTE3MDgw
+        OTEwMTg0OFoXDTIyMDgwODEwMTg0OVowNjE0MDIGA1UEAwwrb3BlbnNoaWZ0LXNl
+        cnZpY2Utc2VydmluZy1zaWduZXJAMTUwMjI3MzkyODCCASIwDQYJKoZIhvcNAQEB
+        BQADggEPADCCAQoCggEBAMpZdkFxG/12vt6AjIw+YiFZHRWlnPxzdFvE7+SuAlIZ
+        vrTVkNuF5dJIgK6ey++m667tcPhC1oukZLEKUBP4bEcXVZlBdpfPI77cNKzDd+a0
+        smyMcexOw2ZEZpJPcsgsE9ib4dBrtoMJukQcFPorMD8bTUXpHRvJQ4Z2q2PpnGK2
+        gRkbc8WH8RdCBAuz8WKL7IJYrYEQEcU/1dW4bJj72aACgHLEOAShxzYVGOvhL3Tf
+        tQByKae4qnJtuPfDh35gGPTuKcapSjtMu0SazKRx91lGA6cN6baWnyK5K5zh/FSd
+        eS3SiE3UD5n+wVxEQY1cnSYWOU02My3ZTTtU+INJqVkCAwEAAaMjMCEwDgYDVR0P
+        AQH/BAQDAgKkMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAIZE
+        c3nTKI70eBPAj4dIqJxyecoSaYh0zZriGtTADuWgNn4p9LIhXv6cpiGAQo/JztYK
+        xDOtqWINT6XiTdHeAJl0YGzkJrRqsKCM7GyFoJdjcGSZM8lzAN/Dw65gLGCIni5z
+        sehsFDWwwNsV7Mhd2ks45hScn6Ic34Ilud32oc5SwONaTgEQmW8MU+qVEGevqcwg
+        C9jzZZaWGGglmxZnehplBfdJ1GGRumlGKjloanw9WDB3CHD0yBL2SUl7LcmuLOF9
+        iu3tLk0b1uxdhsj6G/rn3XypDzo3S9ScdUEia5X+eL6Zs/Zkdsb5Cr3bX8bgBqPn
+        bhzJ2BQy1elZuc4iWyY=
+        -----END CERTIFICATE-----
+
+parameters:
+- name: NAME
+  description: The name for the deployment config, service and route
+  required: true
+- name: DOCKER_IMAGE
+  description:
+  required: true
+- name: CONTAINER_PORT
+  description: The port which will be exposed as service and route
+  value: "8080"
+
